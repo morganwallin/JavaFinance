@@ -7,11 +7,12 @@ import com.esotericsoftware.kryonet.Server;
 import io.reactivex.Observable;
 import io.reactivex.disposables.Disposable;
 import io.reactivex.schedulers.Schedulers;
-import javafx.application.Platform;
 import yahoofinance.Stock;
 import yahoofinance.YahooFinance;
 
 import javax.swing.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.IOException;
@@ -21,11 +22,25 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.concurrent.TimeUnit;
 
+//Alpha vantage API KEY XMZBKLDI65RQYS6D
+
 public class KryoServer {
     private Server server = new Server(10000000, 10000000);
     private StockDatabase stockDatabase = new StockDatabase("notificationDatabase.db");
-    private boolean removedLastNotification = false, removedLastStockObject = false;
+    private ArrayList<StockNotification> notificationArrayList = new ArrayList<>();
+    private Disposable notificationDisposable = new Disposable() {
+        volatile boolean disposed;
 
+        @Override
+        public void dispose() {
+            disposed = true;
+        }
+
+        @Override
+        public boolean isDisposed() {
+            return disposed;
+        }
+    };
     private Disposable timerDisposable = new Disposable() {
         volatile boolean disposed;
 
@@ -67,12 +82,11 @@ public class KryoServer {
                         } else {
 
                             StockObject stockObj = new StockObject(stock);
-                            timerDisposable = Observable.interval(1, TimeUnit.SECONDS, Schedulers.io())
+                            timerDisposable = Observable.interval(5, TimeUnit.SECONDS, Schedulers.io())
                                     .take(Long.MAX_VALUE)
                                     .map(v -> Long.MAX_VALUE - v)
                                     .subscribe(
                                             onNext -> {
-                                                System.out.println("Sent Single Stock...");
                                                 server.sendToTCP(connection.getID(), stockObj);
                                             },
                                             onError -> {
@@ -82,11 +96,6 @@ public class KryoServer {
                                                 //do on complete
                                             },
                                             onSubscribe -> {
-                                                System.out.println("Sent Single Stock...");
-
-
-
-
                                                 server.sendToTCP(connection.getID(), new FirstStockObjectRequest(stockObj));
                                             });
 
@@ -104,7 +113,7 @@ public class KryoServer {
                     timerDisposable.dispose();
                     StockObjectPlusEmail stockObjectPlusEmail = (StockObjectPlusEmail) object;
                     if (stockObjectPlusEmail.getSaveOrRemove() == StockObjectPlusEmail.SaveOrRemove.REMOVE) {
-                        removeStockObject(connection, stockObjectPlusEmail);
+                        removeStockObject(stockObjectPlusEmail);
                     } else {
                         saveStockObject(connection, stockObjectPlusEmail);
                     }
@@ -115,7 +124,7 @@ public class KryoServer {
                     timerDisposable.dispose();
                     StockNotification stockNotification = (StockNotification) object;
                     if (stockNotification.getSaveOrRemove() == StockNotification.SaveOrRemove.REMOVE) {
-                        removeStockNotification(connection, stockNotification);
+                        removeStockNotification(stockNotification);
                     } else if (stockNotification.getSaveOrRemove() == StockNotification.SaveOrRemove.SAVE) {
                         saveStockNotification(connection, stockNotification);
                     }
@@ -128,12 +137,11 @@ public class KryoServer {
                     if (rst.getStockType() == RequestStockList.StockType.STOCK_NOTIFICATION) {
                         sendStockNotificationList(connection, rst);
                     } else if (rst.getStockType() == RequestStockList.StockType.STOCK_OBJECT) {
-                        timerDisposable = Observable.interval(1, TimeUnit.SECONDS, Schedulers.io())
+                        timerDisposable = Observable.interval(5, TimeUnit.SECONDS, Schedulers.io())
                                 .take(Long.MAX_VALUE)
                                 .map(v -> Long.MAX_VALUE - v)
                                 .subscribe(
                                         onNext -> {
-                                            System.out.println("Sent Stock list...");
                                             sendStockObjectList(connection, rst, false);
                                         },
                                         onError -> {
@@ -143,12 +151,28 @@ public class KryoServer {
                                             //do on complete
                                         },
                                         onSubscribe -> {
-                                            System.out.println("Sent Stock list...");
                                             sendStockObjectList(connection, rst, true);
                                         });
 
                     }
                 }
+
+                if(object instanceof StockGraphRequest) {
+                    StockGraphRequest sgr = (StockGraphRequest) object;
+                    Stock stock;
+                    StockGraphInformation stockGraphInformation;
+                    try {
+                        stock = YahooFinance.get(sgr.getStockSymbol());
+                        stockGraphInformation = new StockGraphInformation(stock);
+                        server.sendToTCP(connection.getID(), stockGraphInformation);
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+
+
+
+
             }
         });
 
@@ -159,21 +183,49 @@ public class KryoServer {
                                                 thread.start();*/
         frame.addWindowListener(new WindowAdapter() {
             public void windowClosed(WindowEvent evt) {
+                //server.close();
                 server.stop();
+                notificationDisposable.dispose();
             }
         });
-        frame.getContentPane().add(new JLabel("Close to stop the stocks server."));
+        JToggleButton startNotificationServerButton = new JToggleButton("Start notification server");
+
+
+        startNotificationServerButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                JToggleButton btn = (JToggleButton) e.getSource();
+                if (btn.isSelected()) {
+                    startNotificationServerButton.setText("Stop notification server");
+
+                    notificationDisposable = Observable.interval(30, TimeUnit.SECONDS, Schedulers.io())
+                            .take(Long.MAX_VALUE)
+                            .map(v -> Long.MAX_VALUE - v)
+                            .subscribe(
+                                    onNext -> {
+                                        checkIfNotificationGotTriggered();
+                                    },
+                                    onError -> {
+                                        //do on error
+                                    },
+                                    () -> {
+                                        //do on complete
+                                    },
+                                    onSubscribe -> initializeNotificationArrayList());
+                } else {
+                    startNotificationServerButton.setText("Start notification server");
+                    notificationDisposable.dispose();
+                }
+            }
+        });
+
+
+        frame.getContentPane().add(new JLabel("Close to stop the stocks\n and notification server."));
+        frame.getContentPane().add(startNotificationServerButton);
         frame.setSize(320, 200);
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
     }
-
-    private void monitorNotifications() {
-        /*SendEmail sendEmail = new SendEmail("morgan_wallin@hotmail.com", "subject", "text");
-                                                Thread thread = new Thread(sendEmail);
-                                                thread.start();*/
-    }
-
 
     public static void main(String[] args) {
         new KryoServer();
@@ -191,6 +243,75 @@ public class KryoServer {
             return new StockObject(stock);
         } else {
             return new StockObject();
+        }
+    }
+
+    private void checkIfNotificationGotTriggered() {
+        ArrayList<StockNotification> newArrayList = new ArrayList<>();
+        notificationArrayList.forEach(notification -> {
+            StockObject stockObject = createStockObjectFromStockNotification(notification);
+            try {
+                stockObject.setPrice(YahooFinance.get(stockObject.getSymbol()).getQuote().getPrice().toString());
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            SendEmail sendEmail;
+            if (stockObject.getPrice().equals("N/A") || stockObject.getPrice() == null || stockObject.getPrice().equals("")) {
+            } else {
+                try {
+                    double price = Double.parseDouble(stockObject.getPrice());
+                    String notificationMessage = "Your monitored stock " + stockObject.getSymbol() + " currently costs " + stockObject.getPrice() +
+                            " and is therefore ";
+                    if (notification.getBelowOrAbove() == StockNotification.BelowOrAbove.BELOW) {
+                        if (price < notification.getPrice()) {
+                            notificationMessage += "below your threshold of " + notification.getPrice() + ".";
+                            sendEmail = new SendEmail(notification.getEmail(), "Stock Notification Alert", notificationMessage);
+                            Thread notificationThread = new Thread(sendEmail);
+                            notificationThread.start();
+
+                        } else {
+                            newArrayList.add(notification);
+                        }
+                    } else {
+                        if (price > notification.getPrice()) {
+                            notificationMessage += "above your threshold of " + notification.getPrice() + ".";
+                            sendEmail = new SendEmail(notification.getEmail(), "Stock Notification Alert", notificationMessage);
+                            Thread notificationThread = new Thread(sendEmail);
+                            notificationThread.start();
+                        } else {
+                            newArrayList.add(notification);
+                        }
+                    }
+                } catch (NullPointerException | NumberFormatException e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+
+        notificationArrayList = newArrayList;
+
+    }
+
+    private void initializeNotificationArrayList() {
+        ResultSet rs = stockDatabase.selectAllNotifications();
+
+        try {
+            while (rs.next()) {
+
+                StockNotification.BelowOrAbove belowOrAbove = StockNotification.BelowOrAbove.ABOVE;
+                if (rs.getString("below_or_above").equals("Below")) {
+                    belowOrAbove = StockNotification.BelowOrAbove.BELOW;
+                }
+
+                StockNotification stockNotification = new StockNotification(rs.getString("email"), rs.getString("stocksymbol"),
+                        belowOrAbove, rs.getDouble("price"), StockNotification.SaveOrRemove.SAVE);
+
+                notificationArrayList.add(stockNotification);
+            }
+
+        } catch (SQLException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
         }
     }
 
@@ -214,7 +335,7 @@ public class KryoServer {
         }
         server.sendToTCP(connection.getID(), resultArrayList);
 
-        if (resultArrayList.isEmpty() && !removedLastNotification) {
+        if (resultArrayList.isEmpty()) {
             server.sendToTCP(connection.getID(),
                     new ErrorMessage("loadNotificationError", "No saved notifications found"));
         }
@@ -254,44 +375,21 @@ public class KryoServer {
             server.sendToTCP(connection.getID(), firstStockObjectListRequest);
         }
 
-        if (resultArrayList.isEmpty() && !removedLastStockObject) {
+        if (resultArrayList.isEmpty()) {
             server.sendToTCP(connection.getID(),
                     new ErrorMessage("searchStockError", "No saved stocks found"));
             timerDisposable.dispose();
         }
     }
 
-    private void removeStockNotification(Connection connection, StockNotification stockNotification) {
+    private void removeStockNotification(StockNotification stockNotification) {
         stockDatabase.removeNotification(stockNotification);
-        removedLastNotification = false;
-        try {
-            if (!stockDatabase.selectStocksWithEmail(stockNotification.getEmail(), RequestStockList.StockType.STOCK_NOTIFICATION).next()) {
-                removedLastNotification = true;
-            }
-
-        } catch (SQLException e) {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
-        }
-        //sendStockNotificationList(connection, new RequestStockList(stockNotification.getEmail(), RequestStockList.StockType.STOCK_NOTIFICATION));
-        removedLastNotification = false;
+        notificationArrayList.removeIf(e -> e.getSymbol().equals(stockNotification.getSymbol()) && e.getEmail().equals(stockNotification.getEmail())
+                && e.getBelowOrAbove() == stockNotification.getBelowOrAbove());
     }
 
-    private void removeStockObject(Connection connection, StockObjectPlusEmail stockObjectPlusEmail) {
+    private void removeStockObject(StockObjectPlusEmail stockObjectPlusEmail) {
         stockDatabase.removeStockObject(stockObjectPlusEmail);
-        removedLastStockObject = false;
-        try {
-            if (!stockDatabase.selectStocksWithEmail(stockObjectPlusEmail.getEmail(), RequestStockList.StockType.STOCK_OBJECT).next()) {
-                removedLastStockObject = true;
-            }
-
-        } catch (SQLException e) {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
-        }
-        //server.sendToTCP(connection.getID(), new RequestStockList(stockObjectPlusEmail.getEmail(), RequestStockList.StockType.STOCK_OBJECT));
-        //sendStockObjectList(connection, new RequestStockList(stockObjectPlusEmail.getEmail(), RequestStockList.StockType.STOCK_OBJECT), false);
-        removedLastStockObject = false;
     }
 
     private void saveStockNotification(Connection connection, StockNotification stockNotification) {
@@ -312,8 +410,13 @@ public class KryoServer {
         if (stockDatabase.duplicateEntryExists(stockNotification)) {
             server.sendToTCP(connection.getID(),
                     new ErrorMessage("saveNotificationError", "Entry already found, updated values"));
+
+            notificationArrayList.removeIf(e -> e.getSymbol().equals(stockNotification.getSymbol()) && e.getEmail().equals(stockNotification.getEmail())
+                    && e.getBelowOrAbove() == stockNotification.getBelowOrAbove());
         }
         stockDatabase.insertStockNotification(stockNotification);
+
+        notificationArrayList.add(stockNotification);
     }
 
     private void saveStockObject(Connection connection, StockObjectPlusEmail stockObjectPlusEmail) {

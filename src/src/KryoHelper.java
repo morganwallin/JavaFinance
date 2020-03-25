@@ -23,6 +23,8 @@ public class KryoHelper {
                 k.register(StockNotification.BelowOrAbove.class);
                 k.register(FirstStockObjectListRequest.class);
                 k.register(FirstStockObjectRequest.class);
+                k.register(StockGraphInformation.class);
+                k.register(StockGraphRequest.class);
             });
 
     }
