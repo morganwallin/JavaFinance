@@ -11,21 +11,28 @@ import javafx.application.Platform;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.collections.FXCollections;
+import javafx.event.ActionEvent;
+import javafx.event.EventHandler;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.Scene;
+import javafx.scene.canvas.Canvas;
 import javafx.scene.control.*;
 import javafx.scene.control.Alert.AlertType;
-import javafx.scene.control.skin.ListViewSkin;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.Pane;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Text;
+import javafx.stage.Popup;
 import javafx.stage.Stage;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Optional;
+
 
 public class ClientGUI extends Application {
     /*
@@ -44,7 +51,7 @@ public class ClientGUI extends Application {
     private TextField searchStockTextField = new TextField();
     private ButtonBar timeButtonBar = new ButtonBar(), buttonBarNotification = new ButtonBar();
     private Button saveStockButton = new Button("Save stock to personal list"), stockListButton = new Button("Personal stock list"),
-            removeStockButton = new Button("Remove highlighted stock");
+            removeStockButton = new Button("Remove highlighted stock"), requestStockGraphButton = new Button("Get graph for selected stock");
     private ToggleButton notificationSettingsButton = new ToggleButton("Notification settings");
     private Text submitNotificationRequestErrorText = new Text(""), loadNotificationsRequestErrorText = new Text("");
     private TextField notificationStockSymbol = new TextField(), notificationPrice = new TextField(),
@@ -65,7 +72,7 @@ public class ClientGUI extends Application {
     /*
      * Observables
      */
-    private Observable<ButtonBase> mainButtons = Observable.just(saveStockButton, stockListButton, notificationSettingsButton);
+    private Observable<ButtonBase> mainButtons = Observable.just(saveStockButton, stockListButton, notificationSettingsButton, requestStockGraphButton);
     private Observable<Node> allNotificationObjectsObservable = Observable.just(buttonBarNotification,
             submitNotificationRequestButton, loadNotificationList, notificationStockSymbol, notificationPrice,
             submitNotificationRequestErrorText, loadNotificationsRequestErrorText, removeNotificationButton);
@@ -80,6 +87,13 @@ public class ClientGUI extends Application {
     private ListView<StockNotification> stockNotificationListView = new ListView<StockNotification>();
     private ListView<StockObject> stockObjectListView = new ListView<StockObject>();
     private StockNotification selectedStockNotification;
+    private BorderPane pane;
+    private Stage primaryStage;
+    private Canvas canvas = new Canvas();
+    Scene scene;
+
+    // create a popup
+    Popup popup = new Popup();
 
 
     public static void main(String[] args) {
@@ -116,6 +130,7 @@ public class ClientGUI extends Application {
         removeNotificationButton.setDisable(true);
         removeStockButton.setDisable(true);
         saveStockButton.setDisable(true);
+        requestStockGraphButton.setDisable(true);
 
         Observable.just(notificationStockSymbol, notificationPrice, notificationEmail, loadNotificationList,
                 submitNotificationRequestButton, removeNotificationButton, removeStockButton).subscribe(obj -> {
@@ -143,8 +158,9 @@ public class ClientGUI extends Application {
     }
 
     private void setupStage(Stage primaryStage) {
+        this.primaryStage = primaryStage;
         VBox objects = new VBox(10, searchStockText, searchStockTextField, searchStockErrorText, emailText,
-                notificationEmail, stockListButton, saveStockButton, removeStockButton, notificationSettingsButton, new Text(""),
+                notificationEmail, stockListButton, saveStockButton, removeStockButton, requestStockGraphButton, notificationSettingsButton, new Text(""),
                 loadNotificationsRequestErrorText, loadNotificationList, removeNotificationButton,
                 submitNotificationRequestErrorText, notificationStockSymbol, notificationPrice, buttonBarNotification,
                 submitNotificationRequestButton, usageText);
@@ -156,19 +172,33 @@ public class ClientGUI extends Application {
 
         stockObjectListView.setPrefSize(1200, 800);
         stockNotificationListView.setPrefSize(1200, 800);
+
         centerVbox.getChildren().add(stockObjectListView);
         // Set up scene/pane/stage
 
-        BorderPane pane = new BorderPane();
+
+        // add the label
+        popup.getContent().add(canvas);
+
+        canvas.setWidth(800);
+        canvas.setHeight(600);
+
+
+
+
+
+
+
+        pane = new BorderPane();
         Single.just(pane).subscribe(p -> {
             p.setLeft(objects);
             BorderPane.setAlignment(stockObjectListView, Pos.TOP_LEFT);
             p.setCenter(centerVbox);
         });
 
-        Scene scene = new Scene(pane, 1200, 800);
+        scene = new Scene(pane, 1200, 800);
 
-        Single.just(primaryStage).subscribe(p -> {
+        Single.just(this.primaryStage).subscribe(p -> {
             p.setTitle("Stock Exchanger");
             p.setScene(scene);
             p.setResizable(false);
@@ -253,6 +283,19 @@ public class ClientGUI extends Application {
             }
         });
 
+        requestStockGraphButton.setOnAction(action -> {
+            resetErrorMessages();
+            client.subscribe(c -> {
+                if (currentStock != null) {
+                    c.sendTCP(new StockGraphRequest(currentStock.getSymbol()));
+                } else if (selectedStockNotification != null) {
+                    c.sendTCP(new StockGraphRequest(selectedStockNotification.getSymbol()));
+                } else {
+                    searchStockErrorText.setText("No stock selected");
+                }
+            });
+        });
+
         removeStockButton.setOnAction(action -> {
             resetErrorMessages();
             if (emailWasSupplied()) {
@@ -263,7 +306,6 @@ public class ClientGUI extends Application {
                 });
             }
         });
-
 
         searchStockTextField.setOnAction(action -> {
             recentlyAddedAStock = false;
@@ -318,10 +360,9 @@ public class ClientGUI extends Application {
                             return;
                         }
 
-                        if(centerVbox.getChildren().size() == 1) {
+                        if (centerVbox.getChildren().size() == 1) {
                             setSingleStockView(true);
-                        }
-                        else {
+                        } else {
                             setSingleStockView(false);
                         }
 
@@ -363,12 +404,7 @@ public class ClientGUI extends Application {
 
     @Override
     public void start(Stage primaryStage) {
-
         setupClient();
-        if (!connected) {
-            setupAlertError();
-            return;
-        }
         setupTimeButtonBar();
         setupMainButtons();
         setupNotificationObjects();
@@ -379,16 +415,72 @@ public class ClientGUI extends Application {
     }
 
     private void setupAlertError() {
-        Alert alert = new Alert(AlertType.ERROR, "Could not connect to server.", ButtonType.OK);
-        alert.showAndWait();
+        Platform.runLater(new Runnable() {
+            @Override
+            public void run() {
+                Alert alert = new Alert(AlertType.ERROR, "Could not connect to server. \nTry reconnect?", ButtonType.YES, ButtonType.NO);
+                final Optional<ButtonType> buttonType = alert.showAndWait();
+                if (buttonType.get() == ButtonType.YES) {
+                    client.subscribe(c -> {
+                        alert.close();
+                        tryConnect();
+                    });
+                } else if (buttonType.get() == ButtonType.NO) {
+                    client.subscribe(c -> {
+                        Platform.exit();
+                    });
+
+                }
+            }
+        });
+
     }
 
     private void setupClient() {
         KryoHelper.registerKryoClasses(kryo);
 
         client.subscribe(c -> {
+            c.setTimeout(12000);
             c.addListener(new Listener() {
+
+                public void disconnected(Connection connection) {
+                    //EventQueue.invokeLater(new Runnable() {
+                    //    public void run () {
+                    setupAlertError();
+                    // }
+                    //  });
+                    try {
+                        stop();
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+
+
                 public void received(Connection connection, Object object) {
+                    if(object instanceof StockGraphInformation) {
+
+                        StockGraphInformation sgi = (StockGraphInformation) object;
+                        Platform.runLater(new Runnable() {
+                            @Override
+                            public void run() {
+                                sgi.start(primaryStage);
+                                /*    canvas = new Canvas();
+                                    canvas.getGraphicsContext2D().fillRoundRect(50, 50, 50, 50, 18, 18);
+                                BorderPane newPane = new BorderPane();
+                                newPane.setCenter(canvas);
+
+                                scene = new Scene(newPane, 1200, 800);
+
+                                Single.just(primaryStage).subscribe(p -> {
+
+                                    p.setScene(scene);
+
+                                    p.show();
+                                });*/
+                            }
+                            });
+                            }
 
                     if (object instanceof ErrorMessage) {
                         ErrorMessage errorMsg = (ErrorMessage) object;
@@ -408,7 +500,7 @@ public class ClientGUI extends Application {
                             @Override
                             public void run() {
                                 setSingleStockView(true);
-                                if(!stockObjectListView.getItems().isEmpty()) {
+                                if (!stockObjectListView.getItems().isEmpty()) {
                                     stockObjectListView.getItems().get(0).updateStockObject(stockObject);
                                 }
                                 //stockObjectListView.getItems().setAll(stockObject);
@@ -416,7 +508,7 @@ public class ClientGUI extends Application {
                             }
                         });
                     }
-                    if(object instanceof FirstStockObjectRequest) {
+                    if (object instanceof FirstStockObjectRequest) {
                         StockObject stockObject = ((FirstStockObjectRequest) object).getStockObject();
                         Platform.runLater(new Runnable() {
                             @Override
@@ -498,6 +590,13 @@ public class ClientGUI extends Application {
             });
         });
 
+
+        tryConnect();
+
+
+    }
+
+    private void tryConnect() {
         client.subscribe(c ->
 
         {
@@ -508,6 +607,7 @@ public class ClientGUI extends Application {
             } catch (
                     IOException e) {
                 connected = false;
+                setupAlertError();
 
             }
         });
@@ -515,43 +615,45 @@ public class ClientGUI extends Application {
 
     private void setSingleStockView(boolean bool) {
         singleStockView = bool;
-        if(singleStockView) {
+        if (singleStockView) {
             removeNotificationButton.setDisable(true);
             removeStockButton.setDisable(true);
             submitNotificationRequestButton.setDisable(false);
             saveStockButton.setDisable(false);
-        }
-        else {
-            if(centerVbox.getChildren().contains(stockNotificationListView)) {
-                if(stockNotificationListView.getItems().isEmpty()) {
+            requestStockGraphButton.setDisable(false);
+        } else {
+            if (centerVbox.getChildren().contains(stockNotificationListView)) {
+                if (stockNotificationListView.getItems().isEmpty()) {
                     removeNotificationButton.setDisable(true);
                     submitNotificationRequestButton.setDisable(false);
                     removeStockButton.setDisable(true);
                     saveStockButton.setDisable(true);
                     selectedStockNotification = null;
                     currentStock = null;
-                }
-                else {
+                    requestStockGraphButton.setDisable(true);
+
+                } else {
                     removeNotificationButton.setDisable(false);
                     submitNotificationRequestButton.setDisable(false);
                     removeStockButton.setDisable(true);
                     saveStockButton.setDisable(false);
+                    requestStockGraphButton.setDisable(false);
                 }
-            }
-            else if(centerVbox.getChildren().contains(stockObjectListView)) {
-                if(stockObjectListView.getItems().isEmpty()) {
+            } else if (centerVbox.getChildren().contains(stockObjectListView)) {
+                if (stockObjectListView.getItems().isEmpty()) {
                     removeNotificationButton.setDisable(true);
                     removeStockButton.setDisable(true);
                     submitNotificationRequestButton.setDisable(false);
                     saveStockButton.setDisable(false);
                     selectedStockNotification = null;
                     currentStock = null;
-                }
-                else {
+                    requestStockGraphButton.setDisable(true);
+                } else {
                     removeNotificationButton.setDisable(true);
                     removeStockButton.setDisable(false);
                     submitNotificationRequestButton.setDisable(false);
                     saveStockButton.setDisable(false);
+                    requestStockGraphButton.setDisable(false);
                 }
             }
         }
@@ -563,6 +665,7 @@ public class ClientGUI extends Application {
         selectedStockNotification = null;
         currentStock = null;
         removeStockButton.setDisable(true);
+        requestStockGraphButton.setDisable(true);
     }
 
     private void setCurrentStockIsNotNull(StockObject stockObject) {

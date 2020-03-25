@@ -86,6 +86,19 @@ public class StockDatabase {
 
     }
 
+    public ResultSet selectAllNotifications() {
+        String sql = "SELECT * FROM " + notificationTableName;
+        ResultSet rs = null;
+        try {
+            Statement statement = conn.createStatement();
+            rs = statement.executeQuery(sql);
+
+        } catch (SQLException e) {
+            System.err.println("SQLException in StockDatabase.selectAllNotifications()");
+        }
+        return rs;
+    }
+
 
     public void selectAndPrintAll(RequestStockList.StockType stockType) {
         String sql = "SELECT * FROM " + notificationTableName;
